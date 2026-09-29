@@ -5,7 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_Rien pour l'instant._
+### Added
+
+- **`boond_documents_create` : téléversement d'un fichier local (`filePath`) ou inline (`fileContent` + `fileName`), en plus de `fileUrl`.** Jusqu'ici, attacher un document imposait de l'héberger sur une URL https publique et anonyme — impraticable pour un CV reçu par mail ou un justificatif glissé dans la conversation, et inacceptable pour des pièces RH ou contractuelles. Exactement une source par appel (contrôle dans le handler, message de correction explicite). `filePath` : **désactivé par défaut**, activé par `BOOND_MCP_UPLOAD_DIRS` (répertoires autorisés, chemins absolus) ; confinement vérifié sur le `realpath` des deux côtés (`..` et liens symboliques sortants refusés) ; plafond `BOOND_MCP_UPLOAD_MAX_BYTES` (20 Mo par défaut) ; refusé en transport HTTP, où le serveur ne tourne pas sur le poste de l'utilisateur. `fileContent` : base64 (préfixe `data:` accepté), tous transports, plafonné à 2 Mo — chaque octet coûte ~1,33 caractère de sortie au modèle. Les deux sources sont typées par **magic bytes** contre une liste blanche (PDF, DOCX/XLSX/PPTX, ODT/ODS, DOC/XLS/PPT, RTF, PNG, JPEG, GIF, WebP) ; l'extension ne sert qu'à départager les membres d'un conteneur ZIP/OLE et doit être cohérente avec le contenu. `apiUploadForm` accepte une partie binaire optionnelle (`DOCUMENT_UPLOAD_FILE_FIELD = "file"`). La RAML ne documente pas le corps de `POST /documents` : le nom de la partie multipart a été **vérifié sur un tenant de production** (PDF attaché à un candidat via `filePath`, visible et intact dans l'interface). `fileContent` ne sert qu'aux appelants qui détiennent déjà les octets : un modèle ne retranscrit pas de façon fiable une pièce jointe de conversation en base64. `fileUrl` inchangé ; aucun changement de comportement sans configuration.
+
+### Changed
+
+- `resolveTransport()` déplacé de `index.ts` vers `src/config/transport-kind.ts`, pour que les outils dont le comportement dépend du transport lisent la même règle que le point d'entrée.
 
 ## [2.17.0] - 2026-09-26
 

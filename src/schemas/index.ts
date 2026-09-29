@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_SEARCH_PAGE } from "../constants.js";
+import { DEFAULT_PAGE_SIZE, INLINE_UPLOAD_MAX_BYTES, MAX_PAGE_SIZE, MAX_SEARCH_PAGE } from "../constants.js";
 import { appendOverridesToDescription, resolveLabel } from "../config/dictionary-overrides.js";
 
 // Client-side projection, shared by every search schema. Declared before
@@ -2442,9 +2442,11 @@ export const DictionaryGetSchema = z
 
 // ---- Documents ----
 // Source: https://doc.boondmanager.com/api-externe/raml-build/resources/documents/search.raml
-// L'upload passe par `fileUrl` uniquement : l'API BoondManager télécharge le
-// fichier elle-même, le serveur MCP ne bufferise jamais d'octets de fichier
-// (et n'expose pas de lecture du système de fichiers local).
+// Trois sources, exactement une par appel (vérifié par le handler, un JSON
+// Schema ne sait pas l'exprimer lisiblement) : `fileUrl` (BoondManager
+// télécharge lui-même), `filePath` (fichier local, stdio uniquement, désactivé
+// tant que `BOOND_MCP_UPLOAD_DIRS` n'est pas défini) et `fileContent` + `fileName`
+// (base64 inline, plafonné). Garde-fous : `services/upload-source.ts`.
 export const DocumentParentTypes = [
   "action",
   "resourceResume",
@@ -2483,7 +2485,31 @@ export const DocumentCreateSchema = z
     fileUrl: z
       .string()
       .url()
+      .optional()
       .describe("URL (https) du fichier à téléverser — BoondManager télécharge le fichier depuis cette URL."),
+    filePath: z
+      .string()
+      .min(1)
+      .max(4096)
+      .optional()
+      .describe(
+        "Chemin absolu d'un fichier local, lu par le serveur MCP (transport stdio uniquement, sous un répertoire " +
+          "de BOOND_MCP_UPLOAD_DIRS)."
+      ),
+    fileContent: z
+      .string()
+      .min(1)
+      .max(Math.ceil(INLINE_UPLOAD_MAX_BYTES / 3) * 4 + 256)
+      .optional()
+      .describe(
+        "Contenu du fichier en base64 (préfixe data: URI accepté), petits fichiers uniquement. Exige fileName."
+      ),
+    fileName: z
+      .string()
+      .min(1)
+      .max(255)
+      .optional()
+      .describe("Nom du fichier avec son extension (ex. cv.pdf), requis avec fileContent."),
     parsing: z
       .boolean()
       .optional()
