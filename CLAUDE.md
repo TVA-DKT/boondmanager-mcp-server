@@ -1406,6 +1406,31 @@ Invariants, each with a test:
   `deleted: false` + reason;
 - only capability-absence and *transport* failures fall back to deleting.
 
+## Document Upload Sources
+
+`boond_documents_create` takes exactly one of `fileUrl`, `filePath`, or
+`fileContent` + `fileName`; the count is checked in the handler (a JSON Schema
+`oneOf` would be unreadable for the model and is not needed). Guards live in
+`src/services/upload-source.ts`:
+
+- `filePath` is **off unless `BOOND_MCP_UPLOAD_DIRS` is set**, and always
+  refused over HTTP (the server does not run on the user's machine there).
+  Containment compares `realpath` on both sides — never a string prefix of the
+  raw input — and appends a separator so `/allowed-evil` does not match
+  `/allowed`.
+- `fileContent` is capped at `INLINE_UPLOAD_MAX_BYTES` (2 MiB): base64 costs the
+  model ~1.33 output characters per byte.
+- Both are typed by magic bytes. The extension only disambiguates ZIP (OOXML /
+  ODF) and OLE (legacy Office) containers, and must agree with the content.
+- The multipart part name (`DOCUMENT_UPLOAD_FILE_FIELD = "file"`) is not
+  documented by the RAML; it was confirmed on a production tenant (PDF attached
+  to a candidate via `filePath`, visible and intact in the UI).
+- `fileContent` only helps callers that already hold the exact bytes (scripts,
+  agents with file access). A model cannot reliably re-emit a conversation
+  attachment as base64: it rarely has the raw bytes, and one wrong character
+  corrupts the file. Chat attachments need a transport that bypasses the
+  model's output (upload slot), not a larger inline cap.
+
 ## Access Control (domain / operation restriction)
 
 Operator-side, env-driven filtering of the exposed surface. Implemented in
