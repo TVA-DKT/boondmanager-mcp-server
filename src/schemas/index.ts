@@ -2554,7 +2554,8 @@ export const DictionaryGetSchema = z
 // Schema ne sait pas l'exprimer lisiblement) : `fileUrl` (BoondManager
 // télécharge lui-même), `filePath` (fichier local, stdio uniquement, désactivé
 // tant que `BOOND_MCP_UPLOAD_DIRS` n'est pas défini) et `fileContent` + `fileName`
-// (base64 inline, plafonné). Garde-fous : `services/upload-source.ts`.
+// (base64 inline, plafonné), `uploadSlot` (fichier déposé sur un slot du relais,
+// `services/upload-relay.ts`). Garde-fous : `services/upload-source.ts`.
 export const DocumentParentTypes = [
   "action",
   "resourceResume",
@@ -2618,10 +2619,27 @@ export const DocumentCreateSchema = z
       .max(255)
       .optional()
       .describe("Nom du fichier avec son extension (ex. cv.pdf), requis avec fileContent."),
+    uploadSlot: z
+      .string()
+      .uuid()
+      .optional()
+      .describe("Identifiant d'un slot créé par boond_documents_upload_slot, une fois le fichier déposé."),
     parsing: z
       .boolean()
       .optional()
       .describe("Lancer le parsing IA du CV après upload (uniquement pour parentType=candidateResume)."),
+  })
+  .strict();
+
+export const DocumentUploadSlotSchema = z
+  .object({
+    fileName: z
+      .string()
+      .min(1)
+      .max(255)
+      .describe(
+        "Nom du fichier à déposer, avec son extension (ex. cv.pdf). Il deviendra le nom du document dans Boond."
+      ),
   })
   .strict();
 
@@ -2646,6 +2664,7 @@ export type ReferenceCreateInput = z.infer<typeof ReferenceCreateSchema>;
 export type ReferenceUpdateInput = z.infer<typeof ReferenceUpdateSchema>;
 export type ReferenceIdInput = z.infer<typeof ReferenceIdSchema>;
 export type DocumentCreateInput = z.infer<typeof DocumentCreateSchema>;
+export type DocumentUploadSlotInput = z.infer<typeof DocumentUploadSlotSchema>;
 export type ReportingCompaniesInput = z.infer<typeof ReportingCompaniesSchema>;
 export type ReportingProjectsInput = z.infer<typeof ReportingProjectsSchema>;
 export type ReportingResourcesInput = z.infer<typeof ReportingResourcesSchema>;

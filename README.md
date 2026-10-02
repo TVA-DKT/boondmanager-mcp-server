@@ -31,7 +31,7 @@
 
 Serveur MCP (Model Context Protocol) pour l'API BoondManager, permettant a Claude (Desktop, Cowork, Code) de rechercher, consulter, creer et modifier des enregistrements dans votre instance BoondManager.
 
-**237 outils** couvrant **42 domaines** de l'API BoondManager. Voir [TOOLS.md](./TOOLS.md) pour le catalogue auto-généré (outils + prompts + ressources).
+**238 outils** couvrant **42 domaines** de l'API BoondManager. Voir [TOOLS.md](./TOOLS.md) pour le catalogue auto-généré (outils + prompts + ressources).
 
 > **Sorties structurées.** En plus du texte lisible, les outils `search`, `create`, `update` et `delete` renvoient un `structuredContent` conforme à un `outputSchema` MCP : `search` → `{ total?, count, items[] }` (résumés compacts, pas les ressources JSON:API complètes), `create`/`update` → `{ id?, type? }`, `delete` → `{ id, deleted, reason? }`. Les clients MCP qui exploitent les sorties structurées obtiennent une référence d'entité fiable pour chaîner les appels. Les outils `get` restent en texte seul (leur texte est déjà du JSON exploitable).
 
@@ -110,7 +110,7 @@ Serveur MCP (Model Context Protocol) pour l'API BoondManager, permettant a Claud
 | **Logs d'audit** | 2 | search, get |
 | **Notifications** | 2 | search, get |
 | **Fils de discussion** | 2 | search, get |
-| **Documents / CV** | 3 | get (telechargement), create (upload par URL + parsing CV), delete |
+| **Documents / CV** | 4 | get (telechargement), create (upload par URL, fichier local, slot de relais ou base64 + parsing CV), upload_slot (relais SharePoint), delete |
 | **Application** | 2 | dictionnaire, utilisateur courant |
 
 ### Detail des onglets par entite
@@ -628,6 +628,43 @@ export BOOND_MCP_UPLOAD_DIRS="$HOME/Documents/Boond,$HOME/Downloads"
 ```
 
 Garde-fous : chemin absolu obligatoire, confinement vérifié après résolution des liens symboliques (`..` et symlinks sortants refusés), fichier régulier uniquement, type déterminé par les premiers octets (PDF, DOCX/XLSX/PPTX, ODT/ODS, DOC/XLS/PPT, RTF, PNG, JPEG, GIF, WebP) et non par l'extension. N'autorisez que des répertoires dédiés : tout fichier accepté qui s'y trouve peut être envoyé dans BoondManager à la demande du modèle.
+
+### Relais d'upload pour les pièces jointes de conversation (SharePoint)
+
+Une pièce jointe glissée dans une conversation se trouve dans l'environnement d'exécution de code du client (bac à sable), pas sur le poste du serveur : `filePath` ne la voit pas, et le modèle ne peut pas la retranscrire de façon fiable en base64. Le relais la fait transiter **hors de la sortie du modèle** :
+
+1. `boond_documents_upload_slot({ fileName })` crée, dans une bibliothèque SharePoint dédiée, un dossier de transit et une session d'upload Microsoft Graph pré-authentifiée (15 min, un fichier, un usage) ;
+2. le bac à sable dépose le fichier en une requête `PUT` (`curl`, commande fournie) ;
+3. `boond_documents_create({ parentType, parentId, uploadSlot })` vérifie le fichier (taille, premiers octets), transmet à BoondManager son URL de lecture temporaire Graph via le mécanisme `fileUrl`, puis le **supprime définitivement** (`permanentDelete`, sans corbeille ; repli sur une suppression simple si le locataire la refuse). Les slots expirés sont purgés à l'ouverture suivante.
+
+Les identifiants Entra ID restent côté serveur ; le client ne voit que des URL limitées à un fichier.
+
+| Variable | Défaut | Description |
+| --- | --- | --- |
+| `BOOND_MCP_UPLOAD_RELAY` | _(aucune)_ | `sharepoint` pour activer le relais. Absente = `boond_documents_upload_slot` refusé. |
+| `BOOND_MCP_SHAREPOINT_TENANT_ID` | — | ID de l'annuaire (locataire) Entra ID. |
+| `BOOND_MCP_SHAREPOINT_CLIENT_ID` | — | ID d'application de l'inscription Entra ID. |
+| `BOOND_MCP_SHAREPOINT_CLIENT_SECRET` | — | Secret client (à renouveler avant expiration). |
+| `BOOND_MCP_SHAREPOINT_SITE` | — | Site de transit : `https://<tenant>.sharepoint.com/sites/<site>`. |
+| `BOOND_MCP_SHAREPOINT_LIBRARY` | `Documents` | Nom de la bibliothèque de transit. |
+
+Mise en place, avec le minimum de droits :
+
+- un site SharePoint et une bibliothèque dédiés, réservés aux propriétaires, exclus de la recherche et de la synchronisation hors connexion, sans stratégie de rétention Purview (sinon les fichiers supprimés sont conservés) ;
+- une inscription d'application Entra ID (locataire unique) avec la permission d'application Graph **`Sites.Selected`** et le consentement administrateur, puis le rôle `write` accordé sur ce seul site :
+
+```powershell
+Connect-MgGraph -Scopes "Sites.FullControl.All"
+$site = Get-MgSite -SiteId "<tenant>.sharepoint.com:/sites/<site>"
+New-MgSitePermission -SiteId $site.Id -BodyParameter @{
+  roles = @("write")
+  grantedToIdentities = @(@{ application = @{ id = "<client-id>"; displayName = "boond-mcp-relay" } })
+}
+```
+
+- côté client, autoriser `<tenant>.sharepoint.com` dans la liste blanche réseau de l'exécution de code.
+
+Compromis assumé : l'URL de lecture que reçoit BoondManager est pré-authentifiée pendant sa courte durée de vie (quelques minutes, fixée par Microsoft) ; elle est imprévisible et le fichier est supprimé dès que BoondManager l'a récupéré.
 
 ### Restriction d'accès (profils / domaines / lecture seule)
 
