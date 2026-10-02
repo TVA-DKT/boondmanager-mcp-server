@@ -52,8 +52,14 @@ export const USAGE_GUIDANCE: Record<string, UsageGuidance> = {
       "`boond_candidates_information` / `boond_candidates_administrative` (relations `resumes` / `files`) pour " +
       "*trouver* l'ID : celui-ci exige un ID exact, suffixe compris (`123_resume`), et un ID tronqué désigne un autre document.",
   },
+  boond_documents_upload_slot: {
+    when: "pour attacher à Boond une pièce jointe de conversation (fichier présent dans l'environnement d'exécution de code, pas sur le poste du serveur).",
+    instead:
+      "`boond_documents_create` directement si le fichier est à une URL publique (`fileUrl`) ou sur le poste du " +
+      "serveur (`filePath`). Ne jamais retranscrire la pièce jointe en base64 : passer par ce slot.",
+  },
   boond_documents_create: {
-    when: "pour attacher un fichier à une entité : URL publique, fichier local (si l'opérateur l'a autorisé) ou petit fichier en base64.",
+    when: "pour attacher un fichier à une entité : URL publique, fichier local (si l'opérateur l'a autorisé), slot du relais d'upload ou petit fichier en base64.",
     instead:
       "aucune alternative : c'est le seul outil d'écriture de documents. Si `filePath` est refusé (transport HTTP ou " +
       "BOOND_MCP_UPLOAD_DIRS non défini), passer par `fileUrl` ou, sous 2 Mo, par `fileContent`.",

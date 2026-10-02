@@ -5,6 +5,11 @@ import { apiDownload, apiUploadForm, DownloadTooLargeError } from "../services/b
 import { MAX_DOCUMENT_BYTES, MAX_IMAGE_BYTES, CHARACTER_LIMIT } from "../constants.js";
 import { buildPdf, buildZip } from "../services/document-text.test.js";
 import { readLocalUpload, UploadRejectedError } from "../services/upload-source.js";
+import { uploadRelay } from "../services/upload-relay.js";
+
+vi.mock("../services/upload-relay.js", () => ({
+  uploadRelay: { open: vi.fn(), claim: vi.fn() },
+}));
 
 vi.mock("../services/upload-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/upload-source.js")>();
@@ -41,11 +46,13 @@ describe("registerDocumentTools", () => {
     vi.mocked(apiDownload).mockReset();
     vi.mocked(apiUploadForm).mockReset();
     vi.mocked(readLocalUpload).mockReset();
+    vi.mocked(uploadRelay.open).mockReset();
+    vi.mocked(uploadRelay.claim).mockReset();
   });
 
-  it("should register 3 tools", () => {
+  it("should register 4 tools", () => {
     registerDocumentTools(server);
-    expect(server.registerTool).toHaveBeenCalledTimes(3);
+    expect(server.registerTool).toHaveBeenCalledTimes(4);
   });
 
   it("should register all expected tool names", () => {
@@ -54,6 +61,7 @@ describe("registerDocumentTools", () => {
     expect(names).toContain("boond_documents_get");
     expect(names).toContain("boond_documents_create");
     expect(names).toContain("boond_documents_delete");
+    expect(names).toContain("boond_documents_upload_slot");
   });
 
   it("get is readOnly, create is not, delete is destructive", () => {
@@ -339,6 +347,52 @@ describe("registerDocumentTools", () => {
       );
     });
 
+    it("sends a relayed upload to Boond by its download URL, then purges it — even when Boond fails", async () => {
+      const release = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(uploadRelay.claim).mockResolvedValue({
+        downloadUrl: "https://t.sharepoint.com/_layouts/15/download.aspx?tempauth=x",
+        filename: "cv.pdf",
+        contentType: "application/pdf",
+        size: 42_000,
+        release,
+      });
+      vi.mocked(apiUploadForm).mockResolvedValue({ data: { id: "780", type: "document", attributes: {} } });
+      registerDocumentTools(server);
+      const create = handlerOf(server, "boond_documents_create");
+      const slot = "3f1c8a52-6b9e-4d7a-9a41-2c5e8f0b7d13";
+      const result = await create({ parentType: "candidateResume", parentId: 42, uploadSlot: slot, parsing: true });
+      expect(uploadRelay.claim).toHaveBeenCalledWith(slot);
+      expect(apiUploadForm).toHaveBeenCalledWith("/documents", {
+        parentType: "candidateResume",
+        parentId: "42",
+        fileUrl: "https://t.sharepoint.com/_layouts/15/download.aspx?tempauth=x",
+        parsing: "true",
+      });
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(result.content[0].text).toContain("copie de transit supprimée");
+
+      vi.mocked(apiUploadForm).mockRejectedValueOnce(new Error("Boond 500"));
+      await expect(create({ parentType: "candidateResume", parentId: 42, uploadSlot: slot })).rejects.toThrow(
+        "Boond 500"
+      );
+      expect(release).toHaveBeenCalledTimes(2);
+    });
+
+    it("surfaces a relay refusal (unknown slot, nothing uploaded) as a tool error", async () => {
+      vi.mocked(uploadRelay.claim).mockRejectedValue(new UploadRejectedError("`uploadSlot` inconnu ou déjà utilisé"));
+      registerDocumentTools(server);
+      const result = await handlerOf(
+        server,
+        "boond_documents_create"
+      )({
+        parentType: "company",
+        parentId: 1,
+        uploadSlot: "3f1c8a52-6b9e-4d7a-9a41-2c5e8f0b7d13",
+      });
+      expect(result.isError).toBe(true);
+      expect(apiUploadForm).not.toHaveBeenCalled();
+    });
+
     it("requires exactly one source, and fileName only with fileContent", async () => {
       registerDocumentTools(server);
       const create = handlerOf(server, "boond_documents_create");
@@ -357,6 +411,38 @@ describe("registerDocumentTools", () => {
       });
       expect(strayName.isError).toBe(true);
       expect(apiUploadForm).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("boond_documents_upload_slot", () => {
+    it("returns the slot and a ready-to-run single-PUT curl command", async () => {
+      vi.mocked(uploadRelay.open).mockResolvedValue({
+        uploadSlot: "3f1c8a52-6b9e-4d7a-9a41-2c5e8f0b7d13",
+        uploadUrl: "https://t.sharepoint.com/upload?tempauth=y",
+        expiresAt: "2026-09-29T10:15:00.000Z",
+        maxBytes: 20 * 1024 * 1024,
+        filename: "cv.pdf",
+      });
+      registerDocumentTools(server);
+      const result = await handlerOf(server, "boond_documents_upload_slot")({ fileName: "cv.pdf" });
+      expect(uploadRelay.open).toHaveBeenCalledWith("cv.pdf");
+      expect(result.structuredContent).toMatchObject({
+        uploadSlot: "3f1c8a52-6b9e-4d7a-9a41-2c5e8f0b7d13",
+        uploadUrl: "https://t.sharepoint.com/upload?tempauth=y",
+        fileName: "cv.pdf",
+      });
+      const command = (result.structuredContent as { uploadCommand: string }).uploadCommand;
+      expect(command).toContain("-X PUT");
+      expect(command).toContain("Content-Range: bytes 0-$((N-1))/$N");
+      expect(command).toContain('"https://t.sharepoint.com/upload?tempauth=y"');
+    });
+
+    it("reports a disabled relay as a tool error", async () => {
+      vi.mocked(uploadRelay.open).mockRejectedValue(new UploadRejectedError("Relais d'upload désactivé"));
+      registerDocumentTools(server);
+      const result = await handlerOf(server, "boond_documents_upload_slot")({ fileName: "cv.pdf" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("désactivé");
     });
   });
 });
